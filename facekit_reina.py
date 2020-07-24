@@ -5,23 +5,26 @@
 描述 :
 包含两个子模块: 人脸定位模块和人脸识别模块
 人脸定位: 
-- generate_face_positioned_img函数: 为单张图片进行定位和绘制
-- start_position函数: 一个文件夹内批量生成定位图片的流程控制
+- position_an_image函数: 为单张图片进行定位和绘制
+- position_a_folder函数: 一个文件夹内批量生成定位图片的流程控制
 人脸识别:
 - gen_sav_encodings_dict函数: 生成并保存已知'编码字典'
 - face_people_match函数: 根据'编码字典', 匹配一张人脸
 - crop_and_recognize函数: 找到一张图片中的所有人脸, 依次裁剪后识别, 返回识别结果
 - generate_face_recognition_img函数: 对一张图片进行识别, 并根据结果绘制图像
 - start_recognition函数: 一个文件夹内批量生成识别图片的流程控制
+
 '''
 
 
 #coding=utf-8
 import face_recognition
-import folder_manager_reina
-from cv2 import cv2     # WSL要求, 非WSL直接import cv2
+from cv2 import cv2
 import os
+#import shelve
+import folder_manager_reina
 import json
+#import codecs
 import numpy
 
 
@@ -40,36 +43,47 @@ json_path = 'src/known/.json/'
 encoding_json = 'encoding.json'
 modate_json = 'modate.json'
 
+# face rocognition tolerance
+# 人脸识别容错率
+fault_tolerance = 0.5
 
-# reference of coordinate(the same as opencv)
+
+# reference of coordinate(same as opencv)
 # 坐标系参考(同opevcv)
-# ######################---------→ x
-# #                    #
-# #                    #
-# #                    #
-# #                    #
-# #       IMAGE        #
-# #                    #
-# #                    #
-# #                    #
-# #                    #
-# ######################
-# |
-# |
-# |
-# ↓
-# y
+
+#   ——————————— --→ x
+#   |         |
+#   |  IMAGE  |
+#   |         |
+#   ———————————
+#   ↓
+#   y
 
 ### 定位模块 position module ###
 
-### ------------------------------------------------------------------------------------    
+#============================================================== 
 # generate position for one image                                                       
-# 为单张图片进行定位和绘制                                                               
-def generate_face_positioned_img(path, filename, positioned_path):
-    image = face_recognition.load_image_file(path + filename)
+# 为单张图片进行定位和绘制
+# @parameter:                                                 
+# - filename_withpath:  file name with path (e.g. 'src/unpositioned/img1.png')
+#                       带目录的文件名 (例: 'src/unpositioned/img1.png')
+# - positioned_path:    the target path which will store the positioned image. (e.g. 'src/positioned/')
+#                       保存定位生成图片的目标路径 (例: 'src/positioned/')  
+def position_an_image(filename_withpath, positioned_path):
+    
+    # get filename
+    # 得到文件名
+    filename = os.path.split(filename_withpath)[1]
+
+    if os.path.splitext(filename)[1] not in compatible_formats:
+        return None
+    # load file
+    # 加载图片文件
+    image = face_recognition.load_image_file(filename_withpath)
+    
     face_locations=face_recognition.face_locations(image)
+     # face_locations eg:(139,283,325,97) (y1,x1,y2,x2)
    
-    # face_locations eg:(139,283,325,97) (y1,x1,y2,x2)
     for face in face_locations:
         y1=face[0]
         x1=face[1]
@@ -79,78 +93,120 @@ def generate_face_positioned_img(path, filename, positioned_path):
         ymin = min(y1,y2)
         xmax = max(x1,x2)
         ymax = max(y1,y2)
-        print(xmin,xmax,ymin,ymax)
+        # draw rectangle according to face position
+        # 根据人脸位置画矩形
         cv2.rectangle(image,(xmin,ymin),(xmax,ymax),(255,0,0),3)
 
-    #os.mkdir(positioned_path)
-    cv2.imwrite(positioned_path+filename,cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    # make the positioned_path directory if not exists
+    # 如果没有, 则创建定位图片的路径
+    if not os.path.exists(positioned_path):
+        os.makedirs(positioned_path)
+
+    # save image
+    # 保存图片
+    cv2.imwrite(positioned_path + 'p_' + filename, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
 
-#=======================================================
+#==============================================================
 # position flow control                                                                 
-# 一个文件夹内批量生成定位图片的流程控制                                                                    
-def start_position(raw_image_path, positioned_image_path):
-    
-    # directory of source files
-    # 源文件的目录
-    #raw_image_path='src/known/'
-
-    # directory of output files
-    # 输出文件的目录
-    #positioned_image_path=raw_image_path+'positioned/'
+# 单个文件夹内, 批量生成定位图片的流程控制 
+# @parameter:
+# - raw_path: the path which stores the source image for positioning. (e.g. 'src/unpositioned/')
+#             保存待定位图片的路径 (例: 'src/unpositioned/')
+# - positioned_path:  the target path which will store the positioned image. (e.g. 'src/positioned/')
+#                     保存定位生成图片的目标路径 (例: 'src/positioned/')  
+# @return: (no return)
+#              
+def position_a_folder(raw_path, positioned_path):
 
     # filename List under the path (all file and floder included)
     # 文件名的列表 (包括所有的文件和文件夹)
-    image_name_list=os.listdir(raw_image_path)
+    image_name_list=os.listdir(raw_path)
 
-    if not os.path.exists(positioned_image_path):
-        os.mkdir(positioned_image_path)
+    # make the positioned_path directory if not exists
+    # 如果没有, 则创建定位图片的路径
+    if not os.path.exists(positioned_path):
+        os.makedirs(positioned_path)
 
+    # overwrite flag
+    # 覆写标志
     all_overwrite = False
 
-    for ifilename in image_name_list:
-        if os.path.isdir(raw_image_path + ifilename):
-            continue
-        print("processing " + ifilename + ' ...')
-        if (os.path.splitext(ifilename)[1] in compatible_formats):
-            if (ifilename not in os.listdir(positioned_image_path)):
-                generate_face_positioned_img(raw_image_path, ifilename, positioned_image_path)
+    # process every image with this loop
+    # 使用这个循环处理每个图片
+    for filename in image_name_list:
+
+        filename_withpath = raw_path + filename
+        # make sure that file is compatible
+        # 确保文件格式支持
+
+        # if compatible:
+        # 如果文件格式支持
+        if (os.path.splitext(filename)[1] in compatible_formats):
+            
+            # detect if the positioned file is already generated
+            # 检测是否已经生成定位图片
+
+            # if not generated
+            # 如果还没有生成
+            if (filename not in os.listdir(positioned_path)):
+                # generate positioned image
+                # 生成定位图片
+                position_an_image(filename_withpath, positioned_path)
+            
+            # if generated
+            # 如果已经被生成
             else:
+                # check the overwrite flag
+                # 检查覆写标志
+
+                # if overwrite flag is true
+                # 如果覆写为真
                 if all_overwrite == True:
-                    generate_face_positioned_img(raw_image_path, ifilename, positioned_image_path)
+                    # overwrrite
+                    # 覆写
+                    position_an_image(filename_withpath, positioned_path)
+                # if overwrite is false
+                # 如果覆写为假
                 else:
+                    # wait for choice
+                    # 等待选择
                     while True:
-                        is_overwrite = input(ifilename+" already exists, do you want to overwrite it? (Y/n/all): ")
+                        is_overwrite = input(filename+" already exists, do you want to overwrite it? (Y/n/all): ")
                         if str.lower(is_overwrite) == 'y':
-                            generate_face_positioned_img(raw_image_path, ifilename, positioned_image_path)
+                            # overwrite for this time
+                            # 这一张图片覆写
+                            position_an_image(filename_withpath, positioned_path)
                             break
                         elif str.lower(is_overwrite) == 'n':
+                            # skip
+                            # 跳过
                             break
                         elif str.lower(is_overwrite) == 'all':
-                            generate_face_positioned_img(raw_image_path, ifilename, positioned_image_path)
+                            # overwrite for this time and set the overwrite flag to True
+                            # 这一张图片覆写并将覆写标志置为真(即之后的所有图片全部覆写)
+                            position_an_image(filename_withpath, positioned_path)
                             all_overwrite = True
                             break
+                        # invalid input, ask again
+                        # 输入不合法, 重新输入
                         else:
                             pass
+        # if file is not compatible
+        # 如果文件格式不支持
         else:
             print("Format not supported!")
-            while True:
-                is_show_compatible_formats = input('Show all supported formats? (Y/n): ')
-                if str.lower(is_show_compatible_formats) == 'y':
-                    for one_format in compatible_formats:
-                        print(one_format)
-                    break
-                elif str.lower(is_show_compatible_formats) == 'n':
-                        break
-                else:
-                    pass
+            # show all supported formats
+            # 显示所有支持的格式
+            for one_format in compatible_formats:
+                print(one_format)
 
     print("All completed!")
 
 
 ### 定位识别模块 position and recogition module ###
 
-#=======================================================
+### ------------------------------------------------------------------------------------
 # 生成并保存已知'编码字典'
 def gen_sav_encodings_dict(known_path):
 
@@ -182,7 +238,7 @@ def gen_sav_encodings_dict(known_path):
         # 保存'编码字典'至'编码字典'文件: encoding.json
         # 如果json_path不存在, 就创建它
         if not os.path.exists(json_path):
-            os.mkdir(json_path)
+            os.makedirs(json_path)
         # 将序列化后的'编码字典'写入encoding.json
         with open(json_path + encoding_json, 'w', encoding='utf-8') as encoding_json_file:
             encoding_json_s = json.dumps(new_dict_save)
@@ -261,7 +317,7 @@ def gen_sav_encodings_dict(known_path):
     return new_dict
 
 
-#=======================================================
+### ------------------------------------------------------------------------------------
 # 根据'编码字典', 匹配一张人脸
 def face_people_match(unknown_face_img, known_image_encoding_directory):
     if len(face_recognition.face_encodings(unknown_face_img))!=0:
@@ -279,7 +335,7 @@ def face_people_match(unknown_face_img, known_image_encoding_directory):
         if results[0] < min_face_distance:
             min_face_distance = results[0]
             matched_people = name
-            if min_face_distance <= 0.4:
+            if min_face_distance <= fault_tolerance:
                 is_matched = True
     #如果没有匹配到        
     if not is_matched:
@@ -290,9 +346,10 @@ def face_people_match(unknown_face_img, known_image_encoding_directory):
 
 
 
-#=======================================================
+### ------------------------------------------------------------------------------------
 # find all faces in one image, crop and recognize for each
 # return the dictionary of name:[[xmin, xmax, ymin, ymax]]
+
 # 找到一张图片中的所有人脸, 依次裁剪后识别, 返回识别结果 
 # 返回人名与[[xmin, xmax, ymin, ymax], distance]的字典
 def crop_and_recognize(unknown_file_withpath, known_image_encoding_directory):
@@ -326,7 +383,7 @@ def crop_and_recognize(unknown_file_withpath, known_image_encoding_directory):
     return name__position_distance
 
 
-#=======================================================    
+### ------------------------------------------------------------------------------------    
 # recognize and draw results for one image
 # 对一张图片进行识别, 并根据结果绘制图像
 def generate_face_recognition_img(unknown_file_withpath, known_image_encoding_directory, recog_file_path):
@@ -365,21 +422,20 @@ def generate_face_recognition_img(unknown_file_withpath, known_image_encoding_di
     cv2.imwrite(recog_file_path + file_name, unknown_image)
 
 
-#=======================================================
+### ------------------------------------------------------------------------------------
 # recognition flow control in a single folder
 # 一个文件夹内批量生成识别图片的流程控制
-# 
-def start_recognition(raw_image_path, recognized_image_path, known_image_path):
+def start_recognition(raw_path, recognized_image_path, known_image_path):
     
     #生成已知人脸编码字典
     known_image_encodings_directory = gen_sav_encodings_dict(known_image_path)
 
     #得到源文件夹内所有文件
-    file_in_raw_list = os.listdir(raw_image_path)
+    file_in_raw_list = os.listdir(raw_path)
     
     #如果目标文件夹不存在则创建
     if not os.path.exists(recognized_image_path):
-        os.mkdir(recognized_image_path)
+        os.makedirs(recognized_image_path)
 
     for raw_file in file_in_raw_list:
         # 检测是否为文件夹, 如果是则跳过
@@ -389,6 +445,6 @@ def start_recognition(raw_image_path, recognized_image_path, known_image_path):
         if os.path.splitext(raw_file)[1] not in compatible_formats:
             continue 
         print("recognizing for" + raw_file)
-        generate_face_recognition_img(raw_image_path + raw_file, known_image_encodings_directory, recognized_image_path)
+        generate_face_recognition_img(raw_path + raw_file, known_image_encodings_directory, recognized_image_path)
     
     print("Complete!")
